@@ -182,9 +182,14 @@ def cmd_parse_execute(command_line, shell_context=None):
 
             # If the command is in the allowed shell escape list, modify the environment and execute it
             if command.split()[0] in shell_excape_commands:
+                # Keep original
+                original_ld_preload = shell_context.conf["path_noexec"]
+
                 env = copy.deepcopy(os.environ)
                 env["LD_PRELOAD"] = ""
                 retcode = exec_cmd(command, env=env)
+                # Restore configured no-exec protection
+                os.environ["LD_PRELOAD"] = original_ld_preload
             else:
                 retcode = exec_cmd(command)
 
