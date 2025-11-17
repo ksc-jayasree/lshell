@@ -179,14 +179,25 @@ def cmd_parse_execute(command_line, shell_context=None):
             # Create a set of allowed shell escape commands by removing builtins from the allowed list
             shell_excape_commands = set(shell_context.conf["allowed_shell_escape"]) - \
                 set(variables.builtins_list)
+            cmd = command.split()[0]
 
             # If the command is in the allowed shell escape list, modify the environment and execute it
-            if command.split()[0] in shell_excape_commands:
+            if cmd in shell_excape_commands:
                 env = copy.deepcopy(os.environ)
                 env["LD_PRELOAD"] = ""
                 retcode = exec_cmd(command, env=env)
-            else:
+            elif cmd in variables.builtins_list:
+                # allowed builtin
                 retcode = exec_cmd(command)
+
+            elif cmd in shell_context.conf["allowed"]:
+                # allowed commands
+                retcode = exec_cmd(command)
+
+            else:
+                # EVERYTHING ELSE → BLOCK
+                print(f"Command '{cmd}' not allowed.")
+                retcode = 126
 
     return retcode
 
