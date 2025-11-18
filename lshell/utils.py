@@ -182,20 +182,49 @@ def cmd_parse_execute(command_line, shell_context=None):
                                 set(variables.builtins_list)
 
             if executable in shell_escape_cmds:
-                # For allowed shell escape commands, use the original environment
-                # but ensure PATH is restricted and dangerous variables are removed
-                env = os.environ.copy()
+                # For allowed shell escape commands, use a controlled environment
+                env = {}
+                
+                # Only allow specific, safe environment variables
+                safe_vars = ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL"]
+                for var in safe_vars:
+                    if var in os.environ:
+                        env[var] = os.environ[var]
                 
                 # Set a restricted PATH
                 env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
                 
-                # Remove dangerous environment variables
-                for var in ["LD_PRELOAD", "LD_LIBRARY_PATH"]:
-                    if var in env:
-                        del env[var]
-                
-                # Execute the command with the modified environment
-                retcode = exec_cmd(command, env=env)
+                # For ssl_cert, allow sudo but with restricted environment
+                if executable == 'ssl_cert':
+                    # Create a wrapper script that runs the command with sudo but in a controlled way
+                    wrapper_script = f'''#!/bin/sh
+                    # Wrapper to execute ssl_cert with sudo but in a controlled environment
+                    exec /usr/bin/sudo -n -- /bin/sh -c '
+                        # Set a clean environment
+                        export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                        unset LD_PRELOAD
+                        unset LD_LIBRARY_PATH
+                        # Execute the original command
+                        exec {shlex.quote(command)}
+                    '
+                    '''
+                    
+                    # Create a temporary file for the wrapper script
+                    import tempfile
+                    fd, wrapper_path = tempfile.mkstemp()
+                    try:
+                        with os.fdopen(fd, 'w') as f:
+                            f.write(wrapper_script)
+                        os.chmod(wrapper_path, 0o700)
+                        retcode = exec_cmd(wrapper_path, env=env)
+                    finally:
+                        try:
+                            os.unlink(wrapper_path)
+                        except:
+                            pass
+                else:
+                    # For other shell escape commands, use the restricted environment
+                    retcode = exec_cmd(command, env=env)
 
             else:
                 # Everything else must run with noexec enabled
