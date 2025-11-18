@@ -182,49 +182,56 @@ def cmd_parse_execute(command_line, shell_context=None):
                                 set(variables.builtins_list)
 
             if executable in shell_escape_cmds:
-                # For allowed shell escape commands, use a controlled environment
-                env = {}
+                # Create a secure wrapper for all shell escape commands
+                wrapper_script = f'''#!/bin/sh
+                # Secure wrapper for shell escape commands
                 
-                # Only allow specific, safe environment variables
-                safe_vars = ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL"]
-                for var in safe_vars:
-                    if var in os.environ:
-                        env[var] = os.environ[var]
+                # Set a clean, minimal environment
+                export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                export HOME="{os.environ.get('HOME', '/')}"`
+                export USER="{os.environ.get('USER', '')}"
+                export LOGNAME="{os.environ.get('LOGNAME', '')}"
+                export SHELL="/bin/sh"
+                export TERM="{os.environ.get('TERM', 'dumb')}"
+                export LANG="C"
+                export LC_ALL="C"
                 
-                # Set a restricted PATH
-                env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                # Unset all other environment variables
+                for var in $(env | cut -d= -f1); do
+                    case "$var" in
+                        PATH|HOME|USER|LOGNAME|SHELL|TERM|LANG|LC_ALL)
+                            # Keep these variables
+                            ;;
+                        *)
+                            unset "$var"
+                            ;;
+                    esac
+                done
                 
-                # For ssl_cert, allow sudo but with restricted environment
-                if executable == 'ssl_cert':
-                    # Create a wrapper script that runs the command with sudo but in a controlled way
-                    wrapper_script = f'''#!/bin/sh
-                    # Wrapper to execute ssl_cert with sudo but in a controlled environment
-                    exec /usr/bin/sudo -n -- /bin/sh -c '
-                        # Set a clean environment
-                        export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-                        unset LD_PRELOAD
-                        unset LD_LIBRARY_PATH
-                        # Execute the original command
-                        exec {shlex.quote(command)}
-                    '
-                    '''
+                # Execute the command
+                exec {shlex.quote(command)}
+                '''
+                
+                # Create a temporary file for the wrapper script
+                import tempfile
+                import stat
+                
+                with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+                    f.write(wrapper_script)
+                    wrapper_path = f.name
+                
+                try:
+                    # Make the wrapper executable
+                    os.chmod(wrapper_path, 0o700)
                     
-                    # Create a temporary file for the wrapper script
-                    import tempfile
-                    fd, wrapper_path = tempfile.mkstemp()
+                    # Execute the wrapper with an empty environment
+                    retcode = exec_cmd(wrapper_path, env={})
+                finally:
+                    # Clean up the wrapper script
                     try:
-                        with os.fdopen(fd, 'w') as f:
-                            f.write(wrapper_script)
-                        os.chmod(wrapper_path, 0o700)
-                        retcode = exec_cmd(wrapper_path, env=env)
-                    finally:
-                        try:
-                            os.unlink(wrapper_path)
-                        except:
-                            pass
-                else:
-                    # For other shell escape commands, use the restricted environment
-                    retcode = exec_cmd(command, env=env)
+                        os.unlink(wrapper_path)
+                    except:
+                        pass
 
             else:
                 # Everything else must run with noexec enabled
