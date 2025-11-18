@@ -182,14 +182,21 @@ def cmd_parse_execute(command_line, shell_context=None):
                                 set(variables.builtins_list)
 
             if executable in shell_escape_cmds:
-                # temporarily disable LD_PRELOAD
-                original = os.environ.get("LD_PRELOAD", "")
-                env = copy.deepcopy(os.environ)
-                env["LD_PRELOAD"] = ""
+                # Create a clean environment for the shell escape command
+                # Only keep explicitly allowed environment variables
+                env = {}
+                allowed_vars = ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "PATH", "LANG", "LC_ALL"]
+                for var in allowed_vars:
+                    if var in os.environ:
+                        env[var] = os.environ[var]
+                
+                # Add any explicitly allowed environment variables from config
+                if "env_vars" in shell_context.conf:
+                    for var, value in shell_context.conf["env_vars"].items():
+                        env[var] = value
+                
+                # Execute the command with the clean environment
                 retcode = exec_cmd(command, env=env)
-
-                # restore LD_PRELOAD
-                os.environ["LD_PRELOAD"] = original
 
             else:
                 # Everything else must run with noexec enabled
