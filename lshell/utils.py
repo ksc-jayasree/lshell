@@ -175,13 +175,28 @@ def cmd_parse_execute(command_line, shell_context=None):
             else:
                 retcode = getattr(builtincmd, executable)(shell_context.conf)
         else:
-            # Restore LD_PRELOAD to prevent shell escape
-            if "path_noexec" in shell_context.conf:
-                os.environ["LD_PRELOAD"] = shell_context.conf["path_noexec"]
+            executable = command.split()[0]
 
-            # Execute command safely
-            command = replace_exit_code(command, retcode)
-            retcode = exec_cmd(command)
+            # Allowed shell-escape commands (must run without noexec)
+            shell_escape_cmds = set(shell_context.conf["allowed_shell_escape"]) - \
+                                set(variables.builtins_list)
+
+            if executable in shell_escape_cmds:
+                # temporarily disable LD_PRELOAD
+                original = os.environ.get("LD_PRELOAD", "")
+                env = copy.deepcopy(os.environ)
+                env["LD_PRELOAD"] = ""
+                retcode = exec_cmd(command, env=env)
+
+                # restore LD_PRELOAD
+                os.environ["LD_PRELOAD"] = original
+
+            else:
+                # Everything else must run with noexec enabled
+                if "path_noexec" in shell_context.conf:
+                    os.environ["LD_PRELOAD"] = shell_context.conf["path_noexec"]
+
+                retcode = exec_cmd(command)
 
     return retcode
 
