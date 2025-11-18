@@ -182,20 +182,19 @@ def cmd_parse_execute(command_line, shell_context=None):
                                 set(variables.builtins_list)
 
             if executable in shell_escape_cmds:
-                # Create a clean environment for the shell escape command
-                # Only keep explicitly allowed environment variables
-                env = {}
-                allowed_vars = ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "PATH", "LANG", "LC_ALL"]
-                for var in allowed_vars:
-                    if var in os.environ:
-                        env[var] = os.environ[var]
+                # For allowed shell escape commands, use the original environment
+                # but ensure PATH is restricted and dangerous variables are removed
+                env = os.environ.copy()
                 
-                # Add any explicitly allowed environment variables from config
-                if "env_vars" in shell_context.conf:
-                    for var, value in shell_context.conf["env_vars"].items():
-                        env[var] = value
+                # Set a restricted PATH
+                env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
                 
-                # Execute the command with the clean environment
+                # Remove dangerous environment variables
+                for var in ["LD_PRELOAD", "LD_LIBRARY_PATH"]:
+                    if var in env:
+                        del env[var]
+                
+                # Execute the command with the modified environment
                 retcode = exec_cmd(command, env=env)
 
             else:
@@ -214,32 +213,6 @@ def exec_cmd(cmd, env=None):
     class CtrlZException(Exception):
         """Custom exception to handle Ctrl+Z (SIGTSTP)."""
         pass
-        
-    def sanitize_environment():
-        """Create a sanitized environment for command execution."""
-        # Start with a clean environment
-        clean_env = {}
-        
-        # Only allow specific, safe environment variables
-        safe_vars = ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL"]
-        for var in safe_vars:
-            if var in os.environ:
-                clean_env[var] = os.environ[var]
-                
-        # Add any explicitly allowed environment variables from config
-        if hasattr(shell_context, 'conf') and "env_vars" in shell_context.conf:
-            for var, value in shell_context.conf["env_vars"].items():
-                clean_env[var] = value
-                
-        # Set a restricted PATH
-        clean_env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-        
-        # Remove dangerous environment variables
-        for var in ["LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_FUNC_*"]:
-            if var in clean_env:
-                del clean_env[var]
-                
-        return clean_env
 
     def handle_sigtstp(signum, frame):
         """Handle SIGTSTP (Ctrl+Z) by sending the process to the background."""
@@ -270,17 +243,13 @@ def exec_cmd(cmd, env=None):
         # Parse the command
         cmd_args = shlex.split(cmd)
         
-        # Get sanitized environment
+        # If no environment is provided, use the current environment
         if env is None:
-            env = sanitize_environment()
-        
-        # If this is a sudo command, ensure it's using the sanitized environment
-        if cmd_args and cmd_args[0] == 'sudo':
-            # Ensure sudo doesn't preserve the environment
-            cmd_args.insert(1, '-H')
-            cmd_args.insert(2, '-E')
-            cmd_args.insert(3, 'env_keep=')
-            cmd = ' '.join(cmd_args)
+            env = os.environ.copy()
+            
+        # Ensure PATH is set to a reasonable default
+        if 'PATH' not in env:
+            env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
         
         # If no environment is provided, use a clean minimal environment
         if env is None:
