@@ -214,6 +214,32 @@ def exec_cmd(cmd, env=None):
     class CtrlZException(Exception):
         """Custom exception to handle Ctrl+Z (SIGTSTP)."""
         pass
+        
+    def sanitize_environment():
+        """Create a sanitized environment for command execution."""
+        # Start with a clean environment
+        clean_env = {}
+        
+        # Only allow specific, safe environment variables
+        safe_vars = ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "LC_ALL"]
+        for var in safe_vars:
+            if var in os.environ:
+                clean_env[var] = os.environ[var]
+                
+        # Add any explicitly allowed environment variables from config
+        if hasattr(shell_context, 'conf') and "env_vars" in shell_context.conf:
+            for var, value in shell_context.conf["env_vars"].items():
+                clean_env[var] = value
+                
+        # Set a restricted PATH
+        clean_env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        
+        # Remove dangerous environment variables
+        for var in ["LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_FUNC_*"]:
+            if var in clean_env:
+                del clean_env[var]
+                
+        return clean_env
 
     def handle_sigtstp(signum, frame):
         """Handle SIGTSTP (Ctrl+Z) by sending the process to the background."""
@@ -244,6 +270,18 @@ def exec_cmd(cmd, env=None):
         # Parse the command
         cmd_args = shlex.split(cmd)
         
+        # Get sanitized environment
+        if env is None:
+            env = sanitize_environment()
+        
+        # If this is a sudo command, ensure it's using the sanitized environment
+        if cmd_args and cmd_args[0] == 'sudo':
+            # Ensure sudo doesn't preserve the environment
+            cmd_args.insert(1, '-H')
+            cmd_args.insert(2, '-E')
+            cmd_args.insert(3, 'env_keep=')
+            cmd = ' '.join(cmd_args)
+        
         # If no environment is provided, use a clean minimal environment
         if env is None:
             env = {}
@@ -262,39 +300,48 @@ def exec_cmd(cmd, env=None):
             if var in env:
                 del env[var]
 
-        # Set process group to properly handle signals
         def preexec_fn():
+            # Create new process group and session
             os.setpgrp()
+            os.setsid()
             # Reset signal handlers in child process
             signal.signal(signal.SIGTSTP, signal.SIG_DFL)
             signal.signal(signal.SIGCONT, signal.SIG_DFL)
+            # Set umask to a secure default
+            os.umask(0o077)
 
-        if background:
-            with open(os.devnull, "r") as devnull_in, \
-                 open(os.devnull, "w") as devnull_out:
+        try:
+            if background:
+                with open(os.devnull, "r") as devnull_in, \
+                     open(os.devnull, "w") as devnull_out:
+                    proc = subprocess.Popen(
+                        cmd_args,
+                        stdin=devnull_in,
+                        stdout=devnull_out,
+                        stderr=devnull_out,
+                        env=env,
+                        preexec_fn=preexec_fn,
+                        start_new_session=True,
+                        close_fds=True
+                    )
+                # Add to background jobs and return
+                builtincmd.BACKGROUND_JOBS.append(proc)
+                job_id = len(builtincmd.BACKGROUND_JOBS)
+                print(f"[{job_id}] {cmd} (pid: {proc.pid})")
+                retcode = 0
+            else:
                 proc = subprocess.Popen(
                     cmd_args,
-                    stdin=devnull_in,
-                    stdout=devnull_out,
-                    stderr=devnull_out,
                     env=env,
                     preexec_fn=preexec_fn,
-                    start_new_session=True
+                    start_new_session=True,
+                    close_fds=True
                 )
-            # add to background jobs and return
-            builtincmd.BACKGROUND_JOBS.append(proc)
-            job_id = len(builtincmd.BACKGROUND_JOBS)
-            print(f"[{job_id}] {cmd} (pid: {proc.pid})")
-            retcode = 0
-        else:
-            proc = subprocess.Popen(
-                cmd_args,
-                env=env,
-                preexec_fn=preexec_fn,
-                start_new_session=True
-            )
-            proc.communicate()
-            retcode = proc.returncode if proc.returncode is not None else 0
+                proc.communicate()
+                retcode = proc.returncode if proc.returncode is not None else 0
+        except OSError as e:
+            sys.stderr.write(f"Error executing command: {e}\n")
+            retcode = 1
 
     except FileNotFoundError:
         sys.stderr.write(
