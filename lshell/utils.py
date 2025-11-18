@@ -213,7 +213,6 @@ def exec_cmd(cmd, env=None):
 
     class CtrlZException(Exception):
         """Custom exception to handle Ctrl+Z (SIGTSTP)."""
-
         pass
 
     def handle_sigtstp(signum, frame):
@@ -241,15 +240,46 @@ def exec_cmd(cmd, env=None):
         # Register SIGTSTP (Ctrl+Z) and SIGCONT (resume) signal handlers
         signal.signal(signal.SIGTSTP, handle_sigtstp)
         signal.signal(signal.SIGCONT, handle_sigcont)
+        
+        # Parse the command
         cmd_args = shlex.split(cmd)
+        
+        # If no environment is provided, use a clean minimal environment
+        if env is None:
+            env = {}
+            # Only include safe, minimal environment variables
+            safe_vars = ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "PATH", "LANG", "LC_ALL"]
+            for var in safe_vars:
+                if var in os.environ:
+                    env[var] = os.environ[var]
+        
+        # Ensure PATH is restricted if not explicitly set
+        if "PATH" not in env:
+            env["PATH"] = "/bin:/usr/bin:/usr/local/bin"
+            
+        # Ensure dangerous environment variables are not passed
+        for var in ["LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_FUNC_*"]:
+            if var in env:
+                del env[var]
+
+        # Set process group to properly handle signals
+        def preexec_fn():
+            os.setpgrp()
+            # Reset signal handlers in child process
+            signal.signal(signal.SIGTSTP, signal.SIG_DFL)
+            signal.signal(signal.SIGCONT, signal.SIG_DFL)
+
         if background:
-            with open(os.devnull, "r") as devnull_in:
+            with open(os.devnull, "r") as devnull_in, \
+                 open(os.devnull, "w") as devnull_out:
                 proc = subprocess.Popen(
                     cmd_args,
-                    stdin=devnull_in,  # Redirect input to /dev/null
-                    stdout=sys.stdout,
-                    stderr=sys.stderr,
-                    env=env
+                    stdin=devnull_in,
+                    stdout=devnull_out,
+                    stderr=devnull_out,
+                    env=env,
+                    preexec_fn=preexec_fn,
+                    start_new_session=True
                 )
             # add to background jobs and return
             builtincmd.BACKGROUND_JOBS.append(proc)
@@ -257,7 +287,12 @@ def exec_cmd(cmd, env=None):
             print(f"[{job_id}] {cmd} (pid: {proc.pid})")
             retcode = 0
         else:
-            proc = subprocess.Popen(cmd_args, env=env)
+            proc = subprocess.Popen(
+                cmd_args,
+                env=env,
+                preexec_fn=preexec_fn,
+                start_new_session=True
+            )
             proc.communicate()
             retcode = proc.returncode if proc.returncode is not None else 0
 
