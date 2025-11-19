@@ -282,6 +282,12 @@ def exec_cmd(cmd, env=None):
         # If no environment is provided, use the current environment
         if env is None:
             env = os.environ.copy()
+        else:
+            # If env is provided, merge it with current environment
+            # Start with current environment and override with provided env
+            merged_env = os.environ.copy()
+            merged_env.update(env)
+            env = merged_env
             
         # Ensure PATH is set to a reasonable default
         if 'PATH' not in env:
