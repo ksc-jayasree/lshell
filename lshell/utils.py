@@ -1,6 +1,5 @@
 """ Utils for lshell """
 
-import copy
 import re
 import subprocess
 import os
@@ -8,6 +7,7 @@ import sys
 import random
 import string
 import shlex
+import copy
 from getpass import getuser
 from time import strftime, gmtime
 import signal
@@ -140,6 +140,7 @@ def cmd_parse_execute(command_line, shell_context=None):
 
     # Initialize return code
     retcode = 0
+    dangerous_commands = ['sh', 'bash', 'shell', 'env sh', 'sudo bash', 'sudo sh']
 
     # Iterate over commands and operators
     for i in range(0, len(cmd_split), 2):
@@ -175,17 +176,30 @@ def cmd_parse_execute(command_line, shell_context=None):
             else:
                 retcode = getattr(builtincmd, executable)(shell_context.conf)
         else:
+            # Handle non-built-in commands
             command = replace_exit_code(command, retcode)
-            # Create a set of allowed shell escape commands by removing builtins from the allowed list
-            shell_excape_commands = set(shell_context.conf["allowed_shell_escape"]) - \
-                set(variables.builtins_list)
-
-            # If the command is in the allowed shell escape list, modify the environment and execute it
-            if command.split()[0] in shell_excape_commands:
-                env = copy.deepcopy(os.environ)
-                env["LD_PRELOAD"] = ""
-                retcode = exec_cmd(command, env=env)
+            
+            # Check if command is in allowed shell escape list
+            if 'allowed_shell_escape' in shell_context.conf:
+                shell_escape_commands = set(shell_context.conf["allowed_shell_escape"]) - \
+                    set(variables.builtins_list)
+                
+                if command.split()[0] in shell_escape_commands:
+                    # Mark that shell escape has been used in this session
+                    shell_context.shell_escape_used = True
+                    # For shell escape commands, clear LD_PRELOAD to allow execution
+                    env = copy.deepcopy(os.environ)
+                    env["LD_PRELOAD"] = ""
+                    retcode = exec_cmd(command, env=env)
+                elif shell_context.shell_escape_used and any(dangerous_cmd in command for dangerous_cmd in dangerous_commands):
+                    # Block dangerous commands after shell escape has been used in this session
+                    sys.stderr.write("Error: Shell spawning is not allowed after using shell escape commands\n")
+                    retcode = 1
+                else:
+                    # Regular allowed command with LD_PRELOAD restriction
+                    retcode = exec_cmd(command)
             else:
+                # No shell escape commands configured, use regular execution
                 retcode = exec_cmd(command)
 
     return retcode

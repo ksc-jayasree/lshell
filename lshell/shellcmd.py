@@ -49,6 +49,9 @@ class ShellCmd(cmd.Cmd, object):
         self.conf = userconf
         self.log = self.conf["logpath"]
         self.kill_jobs_at_exit = False
+        
+        # Track shell escape usage for security
+        self.shell_escape_used = False
 
         # Set timer
         if self.conf["timer"] > 0:
