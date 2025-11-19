@@ -187,10 +187,34 @@ def cmd_parse_execute(command_line, shell_context=None):
                 if command.split()[0] in shell_escape_commands:
                     # Mark that shell escape has been used in this session
                     shell_context.shell_escape_used = True
-                    # For shell escape commands, clear LD_PRELOAD to allow execution
+                    # For shell escape commands, execute in non-interactive mode to prevent shell spawning
                     env = copy.deepcopy(os.environ)
                     env["LD_PRELOAD"] = ""
-                    retcode = exec_cmd(command, env=env)
+                    # Force non-interactive execution
+                    cmd_args = command.split()
+                    if len(cmd_args) > 1 and cmd_args[1] in ['-h', '--help', 'help']:
+                        # Allow help commands but execute them safely
+                        retcode = exec_cmd(command, env=env, is_shell_escape=True)
+                    else:
+                        # For other shell escape commands, execute with restricted input/output
+                        try:
+                            proc = subprocess.Popen(
+                                cmd_args,
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                env=env,
+                                text=True
+                            )
+                            stdout, stderr = proc.communicate()
+                            if stdout:
+                                print(stdout.strip())
+                            if stderr:
+                                sys.stderr.write(stderr.strip() + "\n")
+                            retcode = proc.returncode if proc.returncode is not None else 0
+                        except Exception as e:
+                            sys.stderr.write(f"Error executing shell escape command: {e}\n")
+                            retcode = 1
                 elif shell_context.shell_escape_used and any(dangerous_cmd in command for dangerous_cmd in dangerous_commands):
                     # Block dangerous commands after shell escape has been used in this session
                     sys.stderr.write("Error: Shell spawning is not allowed after using shell escape commands\n")
@@ -205,8 +229,16 @@ def cmd_parse_execute(command_line, shell_context=None):
     return retcode
 
 
-def exec_cmd(cmd, env=None):
+def exec_cmd(cmd, env=None, is_shell_escape=False):
     """Execute a command exactly as entered, with support for backgrounding via Ctrl+Z."""
+    
+    # Prevent interactive execution of shell escape commands
+    if is_shell_escape:
+        # This is a shell escape command execution, ensure it's non-interactive
+        cmd_args = cmd.split()
+        if len(cmd_args) > 1 and cmd_args[1] not in ['-h', '--help', 'help', 'show', 'list', 'status']:
+            sys.stderr.write("Error: Only help and read-only operations allowed for shell escape commands\n")
+            return 1
 
     class CtrlZException(Exception):
         """Custom exception to handle Ctrl+Z (SIGTSTP)."""
