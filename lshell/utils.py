@@ -234,10 +234,11 @@ def cmd_parse_execute(command_line, shell_context=None):
 
             else:
                 # Everything else must run with noexec enabled
+                cmd_env = {}
                 if "path_noexec" in shell_context.conf:
-                    os.environ["LD_PRELOAD"] = shell_context.conf["path_noexec"]
+                    cmd_env["LD_PRELOAD"] = shell_context.conf["path_noexec"]
 
-                retcode = exec_cmd(command)
+                retcode = exec_cmd(command, env=cmd_env)
 
     return retcode
 
@@ -285,19 +286,6 @@ def exec_cmd(cmd, env=None):
         # Ensure PATH is set to a reasonable default
         if 'PATH' not in env:
             env['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-        
-        # If no environment is provided, use a clean minimal environment
-        if env is None:
-            env = {}
-            # Only include safe, minimal environment variables
-            safe_vars = ["HOME", "USER", "LOGNAME", "SHELL", "TERM", "PATH", "LANG", "LC_ALL"]
-            for var in safe_vars:
-                if var in os.environ:
-                    env[var] = os.environ[var]
-        
-        # Ensure PATH is restricted if not explicitly set
-        if "PATH" not in env:
-            env["PATH"] = "/bin:/usr/bin:/usr/local/bin"
             
         # Ensure dangerous environment variables are not passed, except LD_PRELOAD if explicitly set
         dangerous_vars = ["LD_LIBRARY_PATH", "BASH_FUNC_*"]
