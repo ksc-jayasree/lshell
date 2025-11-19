@@ -183,12 +183,20 @@ def cmd_parse_execute(command_line, shell_context=None):
 
             if executable in shell_escape_cmds:
                 # Create a secure wrapper for all shell escape commands
+                # Keep LD_PRELOAD for security, but allow the specific command to run
+                ld_preload = ""
+                if "path_noexec" in shell_context.conf:
+                    ld_preload = shell_context.conf["path_noexec"]
+                
                 wrapper_script = f'''#!/bin/sh
                 # Secure wrapper for shell escape commands
                 
+                # Set LD_PRELOAD for security (prevents exec() calls)
+                export LD_PRELOAD="{ld_preload}"
+                
                 # Set a clean, minimal environment
                 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-                export HOME="{os.environ.get('HOME', '/')}"`
+                export HOME="{os.environ.get('HOME', '/')}"
                 export USER="{os.environ.get('USER', '')}"
                 export LOGNAME="{os.environ.get('LOGNAME', '')}"
                 export SHELL="/bin/sh"
@@ -196,19 +204,7 @@ def cmd_parse_execute(command_line, shell_context=None):
                 export LANG="C"
                 export LC_ALL="C"
                 
-                # Unset all other environment variables
-                for var in $(env | cut -d= -f1); do
-                    case "$var" in
-                        PATH|HOME|USER|LOGNAME|SHELL|TERM|LANG|LC_ALL)
-                            # Keep these variables
-                            ;;
-                        *)
-                            unset "$var"
-                            ;;
-                    esac
-                done
-                
-                # Execute the command
+                # Execute the command with LD_PRELOAD protection
                 exec {shlex.quote(command)}
                 '''
                 
@@ -224,8 +220,11 @@ def cmd_parse_execute(command_line, shell_context=None):
                     # Make the wrapper executable
                     os.chmod(wrapper_path, 0o700)
                     
-                    # Execute the wrapper with an empty environment
-                    retcode = exec_cmd(wrapper_path, env={})
+                    # Execute the wrapper with LD_PRELOAD environment
+                    wrapper_env = {}
+                    if ld_preload:
+                        wrapper_env["LD_PRELOAD"] = ld_preload
+                    retcode = exec_cmd(wrapper_path, env=wrapper_env)
                 finally:
                     # Clean up the wrapper script
                     try:
@@ -300,8 +299,12 @@ def exec_cmd(cmd, env=None):
         if "PATH" not in env:
             env["PATH"] = "/bin:/usr/bin:/usr/local/bin"
             
-        # Ensure dangerous environment variables are not passed
-        for var in ["LD_PRELOAD", "LD_LIBRARY_PATH", "BASH_FUNC_*"]:
+        # Ensure dangerous environment variables are not passed, except LD_PRELOAD if explicitly set
+        dangerous_vars = ["LD_LIBRARY_PATH", "BASH_FUNC_*"]
+        if "LD_PRELOAD" not in env:  # Only remove LD_PRELOAD if not explicitly provided
+            dangerous_vars.append("LD_PRELOAD")
+            
+        for var in dangerous_vars:
             if var in env:
                 del env[var]
 
